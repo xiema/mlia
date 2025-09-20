@@ -1,75 +1,57 @@
-from numpy import *
-import operator
+import numpy as np
 
-def createDataSet():
-    group = array([[1.0,1.1],[1.0,1.0],[0,0],[0,0.1]])
-    labels = ['A','A','B','B']
-    return group, labels
+class KNNModel():
+    def __init__(self, n_neighbors=3, dist_func="euclidean"):
+        self.n_neighbors = n_neighbors
+        self._train_X = None
+        self._train_Y = None
+        self._ranges = None
+        self._min_vals = None
+        self._fitted = False
+        if dist_func in ["euclidean"]:
+            self.dist_func = dist_func
+        else:
+            raise ValueError(f"Unsupported: {dist_func}")
 
-def classify0(inX, dataSet, labels, k):
-    dataSetSize = dataSet.shape[0]
-    diffMat = tile(inX, (dataSetSize,1)) - dataSet
-    sqDiffMat = diffMat**2
-    sqDistances = sqDiffMat.sum(axis=1)
-    distances = sqDistances**0.5
-    sortedDistIndices = distances.argsort()
-    classCount={}
-    for i in range(k):
-        voteIlabel = labels[sortedDistIndices[i]]
-        classCount[voteIlabel] = classCount.get(voteIlabel,0) + 1
-    sortedClassCount = sorted(classCount.items(), key=operator.itemgetter(1), reverse=True)
-    return sortedClassCount[0][0]
+    def fit(self, X, Y):
+        self._train_X, self._ranges, self._min_vals = self._normalize(X)
+        self._train_Y = Y.copy()
+        self._fitted = True
 
-def file2matrix(filename):
-    fr = open(filename)
-    numberOfLines = len(fr.readlines())
-    returnMat = zeros((numberOfLines,3))
-    classLabelVector = []
-    fr.seek(0)
-    index = 0
-    for line in fr.readlines():
-        listFromLine = line.strip().split('\t')
-        returnMat[index:] = listFromLine[:3]
-        classLabelVector.append(int(listFromLine[-1]))
-        index+=1
-    return returnMat,classLabelVector
+    def _normalize(self, X):
+        minVals = X.min(0)
+        maxVals = X.max(0)
+        ranges = maxVals-minVals
+        normDataSet = np.zeros(np.shape(X))
+        m = X.shape[0]
+        normDataSet = X - np.tile(minVals, (m,1))
+        normDataSet = normDataSet/np.tile(ranges, (m,1))
+        return normDataSet, ranges, minVals
 
-def autoNorm(dataSet):
-    minVals = dataSet.min(0)
-    maxVals = dataSet.max(0)
-    ranges = maxVals-minVals
-    normDataSet = zeros(shape(dataSet))
-    m = dataSet.shape[0]
-    normDataSet = dataSet - tile(minVals, (m,1))
-    normDataSet = normDataSet/tile(ranges, (m,1))
-    return normDataSet, ranges, minVals
+    def classify(self, X):
+        if not self._fitted:
+            raise RuntimeError
 
-def datingClassTest():
-    hoRatio = 0.04
-    datingDataMat, datingLabels = file2matrix("datingTestSet2.txt")
-    normMat, ranges, minVals = autoNorm(datingDataMat)
-    m = normMat.shape[0]
-    numTestVecs = int(m*hoRatio)
-    errorCount = 0.0
-    for i in range(numTestVecs):
-        classifierResult = classify0(normMat[i,:],normMat[numTestVecs:m,:],\
-            datingLabels[numTestVecs:m],3)
-        print("Classifier: {}\nCorrect: {}".format(classifierResult,datingLabels[i]))
-        if (classifierResult != datingLabels[i]):
-            errorCount += 1.0
-    print("Error Rate: {}".format(errorCount/float(numTestVecs)))
+        X = (X - self._min_vals) / self._ranges
+        n = X.shape[0]
+        m = self._train_X.shape[0]
 
-def classifyPerson():
-    resultList = [
-        "not at all",
-        "in small doses",
-        "in large doses",
-    ]
-    percentTats = float(input("% time playing vidya: "))
-    ffMiles = float(input("frequent flier miles per year: "))
-    iceCream = float(input("L ice cream per year: "))
-    datingDataMat, datingLabels = file2matrix('datingTestSet2.txt')
-    normMat, ranges, minVals = autoNorm(datingDataMat)
-    inArr = array([ffMiles, percentTats, iceCream])
-    classifierResult = classify0((inArr-minVals)/ranges,normMat,datingLabels,3)
-    print(resultList[classifierResult-1])
+        if self.dist_func == "euclidean":
+            d = np.tile(X, (m, 1, 1)).transpose((1, 0, 2)) - self._train_X
+            d = np.sqrt((d ** 2).sum(axis=2))
+        
+        idxs = d.argsort(axis=1)[:, :self.n_neighbors]
+
+        Y = self._train_Y[idxs]
+        preds = np.zeros(n, dtype=Y.dtype)
+
+        for i in range(n):
+            y, c = np.unique(Y[i], return_counts=True)
+            preds[i] = y[c.argmax()]
+            
+        return preds
+
+    def score_accuracy(self, X, Y):
+        preds = self.classify(X)
+        correct = np.sum(preds == Y)
+        return correct / X.shape[0]
